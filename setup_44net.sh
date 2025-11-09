@@ -1,356 +1,269 @@
 #!/bin/bash
 set -e
 
-#--banner start
-# 44Net WireGuard Setup
-# Author: /gregoryfenton
-# GitHub: https://github.com/gregoryfenton
-# Wiki: https://44net.wiki
-# Portal: https://portal.44net.org
-#--banner end
+#================================================#
+# 44Net WireGuard Setup          ▌ ▌▌ ▌▙ ▌   ▐   #
+# Author: /gregoryfenton         ▚▄▌▚▄▌▌▌▌▞▀▖▜▀  #
+# Wiki: https://44net.wiki         ▌  ▌▌▝▌▛▀ ▐ ▖ #
+# Portal: https://portal.44net.org ▘  ▘▘ ▘▝▀▘ ▀  #
+# Discussion: https://ardc.groups.io/g/44net     #
+# GitHub: https://github.com/gregoryfenton       #
+#================================================#
 
 #############################
-# CONFIGURATION VARIABLES
+# Defaults (INI-overridable)
 #############################
-LOCAL_HOSTNAME="myhost"
-REMOTE_HOSTNAME="remotehost"
+INI_FILE="/etc/44net.conf"
+DRY_RUN=0
+COLOR=0
+NO_BANNER=0
+UPDATE=0
+CLEAN=0
 
-WG_LOCAL_IP="44.x.y.w/30"
-WG_REMOTE_IP="44.x.y.z/32"
-
-REMOTE_PUBLIC_IP=""    # Optional for sanity check/ping
-
-WG_PORT=51820
-LAN_SUBNET="192.168.1.0/24"
-
-NET_44_0="44.0.0.0/9"
-NET_44_128="44.128.0.0/10"
-
+# Paths
 WG_CONF="/etc/wireguard/wg0.conf"
 IPTABLES_V4="/etc/iptables/rules.v4"
 LOG_FILE="/var/log/44net-setup.log"
+PRIVATE_KEY_FILE="/etc/wireguard/privatekey"
+PUBLIC_KEY_FILE="/etc/wireguard/publickey"
 
-PRIVATE_KEY_FILE=""
-PUBLIC_KEY_FILE=""
+# Safe default variables
+LOCAL_HOSTNAME=""
+REMOTE_HOSTNAME=""
+WG_LOCAL_IP=""
+WG_REMOTE_IP=""
+WG_PORT=51820
+LAN_SUBNET=""
+NET_44_0="44.0.0.0/9"
+NET_44_128="44.128.0.0/10"
 REMOTE_PUBLIC_KEY_FILE=""
 
-DRY_RUN=false
-SHOW_BANNER=true
-INSTALL_REQUIRED=false
-MODE="auto"
+#############################
+# Load INI
+#############################
+[ -f "$INI_FILE" ] && source "$INI_FILE"
 
 #############################
-# REQUIRED COMMANDS
+# Utility functions
 #############################
-REQUIRED_COMMANDS=(wg wg-quick ip iptables iptables-restore sysctl mkdir cat grep tee echo date ping awk sed)
-declare -A PKG_MAP=(
-  ["wg"]="wireguard"
-  ["wg-quick"]="wireguard"
-  ["ip"]="iproute2"
-  ["iptables"]="iptables"
-  ["iptables-restore"]="iptables"
-  ["sysctl"]="procps"
-  ["mkdir"]="coreutils"
-  ["cat"]="coreutils"
-  ["grep"]="grep"
-  ["tee"]="coreutils"
-  ["echo"]="coreutils"
-  ["date"]="coreutils"
-  ["ping"]="iputils-ping"
-  ["awk"]="gawk"
-  ["sed"]="sed"
-)
-
-#############################
-# LOGGING
-#############################
-timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
-log() { echo "[$(timestamp)] $*" | tee -a "$LOG_FILE"; }
-
-#############################
-# ARG PARSING
-#############################
-usage() {
-    echo "Usage: $0 [--private FILE|KEY] [--public FILE|KEY] [--remote-key FILE|KEY] [--mode local|remote] [--dry-run] [--install-required] [--no-banner]"
-    exit 1
-}
-
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --private) shift; PRIVATE_KEY_FILE="$1";;
-            --public) shift; PUBLIC_KEY_FILE="$1";;
-            --remote-key) shift; REMOTE_PUBLIC_KEY_FILE="$1";;
-            --mode) shift; MODE="$1";;
-            --dry-run) DRY_RUN=true;;
-            --no-banner) SHOW_BANNER=false;;
-            --install-required) INSTALL_REQUIRED=true;;
-            *) usage;;
-        esac
-        shift
-    done
-}
-
-#############################
-# PREREQUISITE CHECK
-#############################
-install_missing_packages() {
-    local missing_pkgs=()
-    for cmd in "${REQUIRED_COMMANDS[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            local pkg="${PKG_MAP[$cmd]:-$cmd}"
-            # Add pkg only if not already in missing_pkgs
-            [[ ! " ${missing_pkgs[*]} " =~ " ${pkg} " ]] && missing_pkgs+=("$pkg")
-        fi
-    done
-
-    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
-        log "Required programs missing: ${missing_pkgs[*]}"
-        if [[ "$INSTALL_REQUIRED" == true ]]; then
-            log "Installing missing packages..."
-            if command -v nala &>/dev/null; then
-                [[ "$DRY_RUN" == true ]] && log "Dry-run: would install via nala: ${missing_pkgs[*]}" || sudo nala install -y "${missing_pkgs[@]}"
-            else
-                [[ "$DRY_RUN" == true ]] && log "Dry-run: would install via apt: ${missing_pkgs[*]}" || { sudo apt update; sudo apt install -y "${missing_pkgs[@]}"; }
-            fi
-        else
-            echo "Required programs missing. Install them with:"
-            if command -v nala &>/dev/null; then
-                echo "nala install ${missing_pkgs[*]}"
-            else
-                echo "apt-get install ${missing_pkgs[*]}"
-            fi
-            exit 1
-        fi
+log() {
+    local ts=$(date '+%Y-%m-%d %H:%M:%S')
+    if [ "$COLOR" -eq 1 ]; then
+        echo -e "\e[32m[$ts]\e[0m $*" | tee -a "$LOG_FILE"
     else
-        log "All required packages are present"
+        echo "[$ts] $*" | tee -a "$LOG_FILE"
     fi
 }
 
-#############################
-# BANNER
-#############################
+log_warn() {
+    local ts=$(date '+%Y-%m-%d %H:%M:%S')
+    if [ "$COLOR" -eq 1 ]; then
+        echo -e "\e[33m[$ts]\e[0m $*" | tee -a "$LOG_FILE"
+    else
+        echo "[$ts] $*" | tee -a "$LOG_FILE"
+    fi
+}
+
+run_or_echo() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[DRY-RUN] $*"
+    else
+        eval "$@"
+    fi
+}
+
 print_banner() {
-cat <<EOF
-=========================================
-  44Net WireGuard Setup
-  Author: /gregoryfenton
-  GitHub: https://github.com/gregoryfenton
-  Wiki: https://44net.wiki
-  Portal: https://portal.44net.org
-=========================================
+    [ "$NO_BANNER" -eq 1 ] && return
+cat <<'EOF'
+##################################################
+# 44Net WireGuard Setup          ▌ ▌▌ ▌▙ ▌   ▐   #
+# Author: /gregoryfenton         ▚▄▌▚▄▌▌▌▌▞▀▖▜▀  #
+# Wiki: https://44net.wiki         ▌  ▌▌▝▌▛▀ ▐ ▖ #
+# Portal: https://portal.44net.org ▘  ▘▘ ▘▝▀▘ ▀  #
+# Discussion: https://ardc.groups.io/g/44net     #
+# GitHub: https://github.com/gregoryfenton       #
+##################################################
 EOF
 }
 
 #############################
-# HELPER FUNCTIONS
+# Command-line parsing
+#############################
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1 ;;
+        --color|--colour) COLOR=1 ;;
+        --no-banner) NO_BANNER=1 ;;
+        --update) UPDATE=1 ;;
+        --clean) CLEAN=1 ;;
+        --config) shift; INI_FILE="$1"; source "$INI_FILE" ;;
+        *) log_warn "Unknown option: $1" ;;
+    esac
+    shift
+done
+
+#############################
+# Required command check
+#############################
+REQUIRED_COMMANDS=(wg ip iptables iproute2 curl grep sed awk systemctl ping)
+PKG_MAP=( ["wg"]="wireguard" ["iptables"]="iptables-persistent" ["ip"]="iproute2" ["curl"]="curl" ["grep"]="grep" ["sed"]="sed" ["awk"]="awk" ["systemctl"]="systemd" ["ping"]="iputils-ping" )
+
+missing_pkgs=()
+for cmd in "${REQUIRED_COMMANDS[@]}"; do
+    if ! command -v "$cmd" &>/dev/null; then
+        missing_pkgs+=("${PKG_MAP[$cmd]:-$cmd}")
+    fi
+done
+
+if [ ${#missing_pkgs[@]} -gt 0 ]; then
+    log_warn "Required programs missing: ${missing_pkgs[*]}"
+    exit 1
+fi
+
+#############################
+# Key handling
 #############################
 read_key_or_file() {
-    local val="$1" name="$2"
+    local val="$1"
     if [[ -f "$val" ]]; then
         cat "$val"
-    elif [[ "$val" =~ ^[A-Za-z0-9+/=]{32,}$ ]]; then
+    elif [[ "$val" =~ ^[A-Za-z0-9+/=]+$ ]]; then
         echo "$val"
     else
-        log "Invalid $name: neither file nor valid key string"
+        log_warn "Invalid key or file: $val"
         exit 1
     fi
 }
 
-validate_ip() {
-    local ip="$1"
-    if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$ ]]; then
-        log "Invalid IP/CIDR: $ip"
-        exit 1
+generate_keys() {
+    if [[ ! -f "$PRIVATE_KEY_FILE" ]]; then
+        log "Generating private key..."
+        run_or_echo "wg genkey | tee '$PRIVATE_KEY_FILE' | wg pubkey > '$PUBLIC_KEY_FILE'"
+    elif [[ ! -f "$PUBLIC_KEY_FILE" ]]; then
+        log "Generating public key from existing private key..."
+        run_or_echo "wg pubkey < '$PRIVATE_KEY_FILE' > '$PUBLIC_KEY_FILE'"
     fi
 }
 
-ping_check() {
-    local target="$1"
-    ping -c 1 -W 2 "$target" &>/dev/null || log "Warning: cannot reach $target"
-}
-
 #############################
-# CLIENT MANAGEMENT (REMOTE)
+# WireGuard config
 #############################
-add_client() {
-    local name="$1" pub="$2" ips="$3"
-    log "Adding client $name ($ips)"
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "Dry-run: wg set wg0 peer $pub allowed-ips $ips"
-    else
-        wg set wg0 peer "$pub" allowed-ips "$ips"
-        echo -e "\n[Peer]\n# $name\nPublicKey = $pub\nAllowedIPs = $ips" >> "$WG_CONF"
-    fi
-}
-
-remove_client() {
-    local name="$1"
-    log "Removing client $name"
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "Dry-run: removing peer $name (look up public key in config)"
-    else
-        local peer_pub
-        peer_pub=$(awk -v n="$name" '/\[Peer\]/{p=0} $0 ~ n{p=1} p && /PublicKey/{print $3}' "$WG_CONF")
-        [[ -n "$peer_pub" ]] && wg set wg0 peer "$peer_pub" remove
-        sed -i "/# $name/,/\[Peer\]/ { /# $name/! { /[Peer]/!d } }" "$WG_CONF"
-    fi
-}
-
-replace_client() {
-    local name="$1" pub="$2" ips="$3"
-    log "Replacing client $name"
-    remove_client "$name"
-    add_client "$name" "$pub" "$ips"
-}
-
-manage_client() {
-    local action client_name client_pub allowed_ips
-    while true; do
-        echo "Select client action: [1] Add [2] Replace [3] Remove [Q] Quit"
-        read -rp "> " action
-        case "$action" in
-            1|Add|add)
-                read -rp "Enter client name: " client_name
-                read -rp "Enter client public key: " client_pub
-                read -rp "Enter allowed IPs (comma-separated, e.g., 44.x.y.z/32): " allowed_ips
-                add_client "$client_name" "$client_pub" "$allowed_ips"
-                ;;
-            2|Replace|replace)
-                read -rp "Enter client name to replace: " client_name
-                read -rp "Enter new client public key: " client_pub
-                read -rp "Enter new allowed IPs: " allowed_ips
-                replace_client "$client_name" "$client_pub" "$allowed_ips"
-                ;;
-            3|Remove|remove)
-                read -rp "Enter client name to remove: " client_name
-                remove_client "$client_name"
-                ;;
-            Q|q|quit)
-                break
-                ;;
-            *)
-                echo "Invalid option";;
-        esac
-    done
-}
-
-#############################
-# MAIN FLOW
-#############################
-parse_args "$@"
-$SHOW_BANNER && print_banner
-install_missing_packages
-
-# Detect mode automatically if not forced
-[[ "$MODE" == "auto" ]] && [[ "$(hostname)" == "$LOCAL_HOSTNAME" ]] && MODE="local"
-[[ "$MODE" == "auto" ]] && [[ "$(hostname)" == "$REMOTE_HOSTNAME" ]] && MODE="remote"
-log "Running in $MODE mode"
-
-# Validate IPs
-validate_ip "$WG_LOCAL_IP"
-validate_ip "$WG_REMOTE_IP"
-[[ -n "$REMOTE_PUBLIC_IP" ]] && validate_ip "$REMOTE_PUBLIC_IP"
-[[ -n "$LAN_SUBNET" ]] && validate_ip "$LAN_SUBNET"
-
-# Read/generate keys
-[[ -n "$PRIVATE_KEY_FILE" ]] && PRIVATE_KEY=$(read_key_or_file "$PRIVATE_KEY_FILE" "private key")
-[[ -n "$PUBLIC_KEY_FILE" ]] && PUBLIC_KEY=$(read_key_or_file "$PUBLIC_KEY_FILE" "public key")
-[[ -n "$REMOTE_PUBLIC_KEY_FILE" ]] && REMOTE_PUBLIC_KEY=$(read_key_or_file "$REMOTE_PUBLIC_KEY_FILE" "remote public key")
-
-# Generate missing keys if necessary
-if [[ -z "$PRIVATE_KEY" ]]; then
-    log "Generating private key..."
-    [[ "$DRY_RUN" == false ]] && { umask 0077; mkdir -p /etc/wireguard; wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey; }
-    PRIVATE_KEY=$(cat /etc/wireguard/privatekey)
-    PUBLIC_KEY=$(cat /etc/wireguard/publickey)
-elif [[ -z "$PUBLIC_KEY" ]]; then
-    log "Generating public key from existing private key..."
-    [[ "$DRY_RUN" == false ]] && echo "$PRIVATE_KEY" | wg pubkey > /etc/wireguard/publickey
-    PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
-fi
-
-# Write wg0.conf
-log "Writing WireGuard config..."
-if [[ "$DRY_RUN" == true ]]; then
-cat <<EOF
+write_wg_conf() {
+    log "Writing WireGuard config..."
+cat > "$WG_CONF" <<EOF
 [Interface]
 Address = $WG_LOCAL_IP
 ListenPort = $WG_PORT
-PrivateKey = $PRIVATE_KEY
+PrivateKey = $(read_key_or_file "$PRIVATE_KEY_FILE")
 
 [Peer]
-PublicKey = $REMOTE_PUBLIC_KEY
+PublicKey = $(read_key_or_file "$REMOTE_PUBLIC_KEY_FILE")
 AllowedIPs = $NET_44_0,$NET_44_128,$WG_REMOTE_IP
 PersistentKeepalive = 25
 EOF
-else
-    mkdir -p "$(dirname "$WG_CONF")"
-    cat > "$WG_CONF" <<EOF
-[Interface]
-Address = $WG_LOCAL_IP
-ListenPort = $WG_PORT
-PrivateKey = $PRIVATE_KEY
+}
 
-[Peer]
-PublicKey = $REMOTE_PUBLIC_KEY
-AllowedIPs = $NET_44_0,$NET_44_128,$WG_REMOTE_IP
-PersistentKeepalive = 25
-EOF
-    chmod 600 "$WG_CONF"
-fi
+#############################
+# Routes and forwarding
+#############################
+setup_routes() {
+    log "Adding 44Net routes..."
+    run_or_echo "ip route add $NET_44_0 dev wg0 || true"
+    run_or_echo "ip route add $NET_44_128 dev wg0 || true"
+}
 
-# Routes
-log "Setting 44Net routes..."
-[[ "$DRY_RUN" == false ]] && { ip route add $NET_44_0 dev wg0 || true; ip route add $NET_44_128 dev wg0 || true; }
+enable_ip_forwarding() {
+    log "Enabling IP forwarding..."
+    run_or_echo "sysctl -w net.ipv4.ip_forward=1"
+}
 
-# Iptables
-if [[ -n "$LAN_SUBNET" ]]; then
+bring_up_interface() {
+    log "Bringing up WireGuard..."
+    run_or_echo "systemctl enable wg-quick@wg0 && systemctl restart wg-quick@wg0"
+}
+
+#############################
+# Non-destructive iptables insertion
+#############################
+update_iptables() {
     log "Updating iptables..."
-    [[ "$DRY_RUN" == false ]] && {
-        mkdir -p "$(dirname "$IPTABLES_V4")"
-        [[ -f "$IPTABLES_V4" ]] && cp "$IPTABLES_V4" "$IPTABLES_V4.bak"
-        cat >> "$IPTABLES_V4" <<EOF
-
+    mkdir -p $(dirname "$IPTABLES_V4")
+    tmpfile=$(mktemp)
+    if [[ -f "$IPTABLES_V4" ]]; then
+        grep -v '# 44Net rules' "$IPTABLES_V4" > "$tmpfile"
+    fi
+    cat >> "$tmpfile" <<EOF
+# 44Net rules
 *nat
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
 -A POSTROUTING -s $LAN_SUBNET -o wg0 -d $NET_44_0 -j MASQUERADE
 -A POSTROUTING -s $LAN_SUBNET -o wg0 -d $NET_44_128 -j MASQUERADE
 COMMIT
 
 *filter
+:INPUT ACCEPT [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
 -A FORWARD -s $LAN_SUBNET -o wg0 -d $NET_44_0 -i vmbr0 -j ACCEPT
 -A FORWARD -s $LAN_SUBNET -o wg0 -d $NET_44_128 -i vmbr0 -j ACCEPT
 -A FORWARD -i wg0 -o vmbr0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 -A FORWARD -i wg0 -o vmbr0 -d $LAN_SUBNET -j ACCEPT
 COMMIT
 EOF
-        iptables-restore < "$IPTABLES_V4"
-    }
-fi
+    run_or_echo "cp '$tmpfile' '$IPTABLES_V4' && iptables-restore < '$IPTABLES_V4'"
+    rm -f "$tmpfile"
+}
 
-# Enable IP forwarding
-log "Enabling IP forwarding..."
-[[ "$DRY_RUN" == false ]] && { sysctl -w net.ipv4.ip_forward=1; grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf; }
+#############################
+# Cleanup
+#############################
+cleanup_44net() {
+    log "Starting --clean"
+    run_or_echo "wg-quick down wg0 || true"
+    run_or_echo "rm -f '$WG_CONF' '$PRIVATE_KEY_FILE' '$PUBLIC_KEY_FILE'"
+    run_or_echo "ip route del $NET_44_0 dev wg0 || true"
+    run_or_echo "ip route del $NET_44_128 dev wg0 || true"
+    run_or_echo "iptables-restore < <(grep -v '# 44Net rules' '$IPTABLES_V4') || true"
+    log "44Net cleanup completed"
+}
 
-# Enable wg0
-if [[ "$DRY_RUN" == false ]]; then
-    log "Bringing up WireGuard interface..."
-    systemctl enable wg-quick@wg0
-    systemctl restart wg-quick@wg0
-fi
+#############################
+# Self-update
+#############################
+self_update() {
+    local tmp=$(mktemp)
+    if curl -fsSL "https://raw.githubusercontent.com/gregoryfenton/44netautosetup/main/setup_44net.sh" -o "$tmp"; then
+        if ! cmp -s "$0" "$tmp"; then
+            log "New version detected. Updating..."
+            run_or_echo "cp '$tmp' '$0' && chmod +x '$0'"
+            log "Script updated. Re-run to use latest version."
+            rm -f "$tmp"
+            exit 0
+        else
+            log "Already at latest version."
+        fi
+    else
+        log_warn "Update check failed."
+    fi
+    rm -f "$tmp"
+}
 
-# Sanity ping
-if [[ "$MODE" == "local" ]]; then
-    ping_check "$WG_REMOTE_IP"
-    ping_check "44.0.0.1"
-elif [[ "$MODE" == "remote" ]]; then
-    ping_check "44.0.0.1"
-fi
+#############################
+# Main
+#############################
+print_banner
 
-# Remote client management
-if [[ "$MODE" == "remote" ]]; then
-    log "Remote gateway client management starting..."
-    manage_client
-fi
+[ "$UPDATE" -eq 1 ] && self_update
+[ "$CLEAN" -eq 1 ] && { cleanup_44net; exit 0; }
+
+generate_keys
+write_wg_conf
+setup_routes
+enable_ip_forwarding
+update_iptables
+bring_up_interface
 
 log "=== 44Net WireGuard setup completed successfully ==="
