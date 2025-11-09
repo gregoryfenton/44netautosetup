@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Global Variables
 RUN_TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
-LOG_FILE="/var/log/wg-manager.log"
+LOG_FILE="/var/log/setup_44net.log"
 
 SHOW_BANNER=true
 DRY_RUN=false
