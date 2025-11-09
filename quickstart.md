@@ -1,119 +1,167 @@
-WireGuard 44Net Quickstart Reference
-1. Setup Variables
+## 44Net WireGuard Setup Script
 
-Adjust these at the top of the script before running, or export them in your shell:
+![44Net](https://raw.githubusercontent.com/gregoryfenton/44net/main/logo.png)  
 
-# Hostnames
-LOCAL_HOSTNAME="labby"
-REMOTE_HOSTNAME="z230"
+*Author: /gregoryfenton  
+*GitHub: https://github.com/gregoryfenton  
+*Wiki: https://44net.wiki  
+*Portal: https://portal.44net.org  
 
-# WireGuard IPs
-WG_LOCAL_IP="44.131.40.1/30"
-WG_REMOTE_IP="44.131.40.2/32"
-WG_PORT=51820
+---
 
-# Optional LAN subnet for NAT (leave empty if standalone)
-LAN_SUBNET="192.168.1.0/24"
+### Overview
 
-# 44Net ranges
-NET_44_0="44.0.0.0/9"
-NET_44_128="44.128.0.0/10"
+This script configures a **WireGuard VPN tunnel** for 44Net connectivity on either a **local client machine** or a **remote gateway server**. It ensures proper routing, firewall rules, and sanity checks to allow LAN clients to access 44Net addresses through a remote gateway.
 
-# Key files (optional)
-PRIVATE_KEY_FILE="/root/privkey"
-PUBLIC_KEY_FILE="/root/pubkey"
-REMOTE_PUBLIC_KEY_FILE="/root/remote.pub"
+* Key Features:
 
-2. Install & Run Setup Script
-chmod +x setup-44net.sh
-sudo ./setup-44net.sh
+- Automatic local/remote mode detection (based on hostname)  
+- Full IP and configuration sanity checks before making changes  
+- Reusable private keys; generates public key if missing  
+- Safe iptables editing — preserves existing rules  
+- Adds routes for 44Net ranges (44.0.0.0/9 and 44.128.0.0/10)  
+- Remote client management (add/remove/replace) without restarting WireGuard  
+- Optional dry-run mode to preview changes  
+- Ping checks to verify connectivity  
 
+---
 
-Optional parameters if using pre-generated keys:
+### Requirements
 
-sudo ./setup-44net.sh \
-  --private /root/privkey \
-  --public /root/pubkey \
-  --remote-key /root/remote.pub
+- **Operating System:** Linux (Debian/Ubuntu recommended)  
+- **Packages:** wireguard, iptables-persistent, iproute2, resolvconf  
+- **Permissions:** Root access required for installation, routing, and iptables updates  
 
+---
 
-If keys are not provided, the script prompts for the remote public key.
+### Installation
 
-3. Verify WireGuard
-wg show
-systemctl status wg-quick@wg0
+1. Clone the repository:  
 
-4. Test Connectivity
+```bash
+git clone https://github.com/gregoryfenton/44netautosetup.git
+cd 44net
+```
 
-From the server:
+2. Make the script executable:  
 
-ping -c 3 44.0.0.1
-ping -c 3 44.128.0.1
+```bash
+chmod +x wg-manager.sh
+```
 
+3. (Optional) Install dependencies:
 
-From a LAN client (if NAT configured):
+```bash
+sudo apt update
+sudo apt install -y wireguard iptables-persistent iproute2 resolvconf
+```
 
-ping 44.0.0.1
-ping 44.128.0.1
+---
 
-5. Firewall & NAT Rules
+### Usage
 
-Persistent iptables rules are stored in:
+#### Basic Usage
 
-/etc/iptables/rules.v4
+```bash
+sudo ./wg-manager.sh
+```
 
+The script will:
 
-NAT rules for LAN to 44Net:
+1. Detect if it is running on the local client or remote gateway (based on hostname).  
+2. Perform sanity checks on IPs, LAN subnet, and WireGuard keys.  
+3. Generate missing keys as needed.  
+4. Update /etc/wireguard/wg0.conf.  
+5. Add routes for 44Net ranges.  
+6. Update iptables rules safely.  
+7. Enable IP forwarding.  
+8. Run ping tests to verify connectivity.  
+9. Log all actions to /var/log/wg-manager.log.  
 
-POSTROUTING -s <LAN_SUBNET> -o wg0 -d 44.0.0.0/9 -j MASQUERADE
-POSTROUTING -s <LAN_SUBNET> -o wg0 -d 44.128.0.0/10 -j MASQUERADE
+---
 
+#### Command-Line Options
 
-FORWARD rules:
+| Option | Description  
+|--------|-------------  
+| --private <key\|file> | Private key string or path to a private key file  
+| --public <key\|file> | Public key string or path to a public key file  
+| --remote-key <key\|file> | Public key of the remote peer (gateway or client)  
+| --dry-run | Print all changes the script would make without touching files  
+| --mode <local\|remote> | Override automatic host detection  
+| --no-banner | Skip displaying the banner at the start of the script  
 
-Allow LAN -> 44Net (outbound)
-Allow 44Net -> LAN (inbound, RELATED,ESTABLISHED)
+---
 
-6. IP Forwarding
+#### Examples
 
-Ensure IP forwarding is enabled persistently:
+##### Local Client
 
-sysctl -w net.ipv4.ip_forward=1
-grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+```bash
+sudo ./wg-manager.sh --private /home/user/wg-private.key --remote-key /home/user/wg-remote.pub
+```
 
-7. Service Management
-sudo systemctl enable wg-quick@wg0
-sudo systemctl start wg-quick@wg0
-sudo systemctl restart wg-quick@wg0   # if needed
+- Sets up the client tunnel to the remote 44Net gateway  
+- Adds necessary routes and iptables rules  
+- Performs connectivity checks to remote gateway and 44Net main node  
 
-8. Advanced / Optional
+##### Remote Gateway
 
-Use specific 44Net subnets instead of full /8 if part of the space is sold:
+```bash
+sudo ./wg-manager.sh --mode remote --private /etc/wireguard/privatekey --remote-key CLIENT_PUBLIC_KEY
+```
 
-NET_44_0="44.0.0.0/9"
-NET_44_128="44.128.0.0/10"
+- Configures the remote gateway interface  
+- Adds NAT and forwarding rules for LAN clients  
+- Supports dynamic client management via wg set live updates  
 
+##### Dry-Run Mode
 
-File-based key exchange:
+```bash
+sudo ./wg-manager.sh --dry-run
+```
 
---private /path/to/privkey --public /path/to/pubkey --remote-key /path/to/remote.pub
+- Outputs all configuration changes to console  
+- No files or iptables rules are modified  
 
+---
 
-Check routes:
+### Logging
 
-ip route show
+All operations are logged with timestamps to:
 
+`
+/var/log/wg-manager.log
+`
 
-Reload iptables rules:
+Use standard log rotation to manage file size.
 
-sudo iptables-restore < /etc/iptables/rules.v4
+---
 
-9. Notes
+### Adding/Removing Clients (Remote Gateway Only)
 
-Tunnel only allows 44Net traffic; normal internet remains separate.
+- The remote gateway supports adding, replacing, or removing clients **without restarting WireGuard**, using wg set live updates.  
+- This ensures minimal downtime and maintains connectivity for existing peers.
 
-LAN NAT optional; leave LAN_SUBNET empty if standalone server.
+---
 
-Key exchange can be manual (interactive prompt) or via files.
+### Safety Notes
 
-Persistent and fully automated after script runs.
+- The script **never exposes or requires client private keys**.  
+- Sanity checks validate all IPs, subnets, and key formats before writing any configuration.  
+- Existing firewall rules are preserved; only the 44Net-specific rules are added or updated.  
+- Ping checks confirm that the tunnel and 44Net connectivity are functional after setup.  
+
+---
+
+### License
+
+MIT License — see LICENSE in the repository.
+
+---
+
+### Support & Links
+
+- GitHub: https://github.com/gregoryfenton  
+- 44Net Wiki: https://44net.wiki  
+- 44Net Portal: https://portal.44net.org  
