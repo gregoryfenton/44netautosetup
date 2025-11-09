@@ -46,7 +46,7 @@ cd 44net
 2. Make the script executable:  
 
 ```bash
-chmod +x wg-manager.sh
+chmod +x setup_44net.sh
 ```
 
 3. (Optional) Install dependencies:
@@ -63,7 +63,7 @@ sudo apt install -y wireguard iptables-persistent iproute2 resolvconf
 #### Basic Usage
 
 ```bash
-sudo ./wg-manager.sh
+sudo ./setup_44net.sh
 ```
 
 The script will:
@@ -98,7 +98,7 @@ The script will:
 ##### Local Client
 
 ```bash
-sudo ./wg-manager.sh --private /home/user/wg-private.key --remote-key /home/user/wg-remote.pub
+sudo ./setup_44net.sh --private /home/user/wg-private.key --remote-key /home/user/wg-remote.pub
 ```
 
 - Sets up the client tunnel to the remote 44Net gateway  
@@ -108,7 +108,7 @@ sudo ./wg-manager.sh --private /home/user/wg-private.key --remote-key /home/user
 ##### Remote Gateway
 
 ```bash
-sudo ./wg-manager.sh --mode remote --private /etc/wireguard/privatekey --remote-key CLIENT_PUBLIC_KEY
+sudo ./setup_44net.sh --mode remote --private /etc/wireguard/privatekey --remote-key CLIENT_PUBLIC_KEY
 ```
 
 - Configures the remote gateway interface  
@@ -118,7 +118,7 @@ sudo ./wg-manager.sh --mode remote --private /etc/wireguard/privatekey --remote-
 ##### Dry-Run Mode
 
 ```bash
-sudo ./wg-manager.sh --dry-run
+sudo ./setup_44net.sh --dry-run
 ```
 
 - Outputs all configuration changes to console  
@@ -131,7 +131,7 @@ sudo ./wg-manager.sh --dry-run
 All operations are logged with timestamps to:
 
 `
-/var/log/wg-manager.log
+/var/log/setup_44net.log
 `
 
 Use standard log rotation to manage file size.
