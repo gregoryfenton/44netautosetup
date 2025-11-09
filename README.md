@@ -1,138 +1,108 @@
-# WireGuard 44Net Setup Guide
+#  44Net WireGuard Setup
+==============================
 
-This guide explains how to configure a WireGuard tunnel to access the 44Net (ARDC) IP space.  
-It supports both standalone servers and LAN gateway setups.
+* Author: /gregoryfenton  
+* GitHub: https://github.com/gregoryfenton  
+* Wiki: https://44net.wiki  
+* Portal: https://portal.44net.org  
 
 ## Overview
-### The setup:
-* Establishes a secure WireGuard VPN between two peers.
-* Routes all traffic destined for 44Net through the tunnel.
-* Optionally NATs LAN subnet traffic through the tunnel.
-* Provides persistent routes and service startup.
-* Supports interactive or file-based key configuration.
+This script configures a local or remote 44Net WireGuard gateway. It supports:
+* Local client routing to 44Net
+* Remote gateway setup
+* Interactive and non-interactive client management (add, replace, remove)
+* Dry-run mode for testing changes
+* Full sanity checks and logging
 
-This guide uses a generic Bash script (setup-44net.sh) to automate the process.
+## Requirements
+* bash shell
+* WireGuard installed (wg, wg-quick)
+* iptables and iproute2
+* Root privileges
 
-## Prerequisites
+## Usage
 
-* Ubuntu/Debian server (or derivative) with root access.
-* Optional LAN network to NAT for (e.g., 192.168.1.0/24).
-* Internet access to install WireGuard and dependencies.
-* Basic familiarity with Linux networking.
+* Basic usage (auto-detect mode):
 
-## Configuration Variables
-At the top of the script, you can customize:
-| Variable | Description | Example |
-|-----|-----|-----|
-|LOCAL_HOSTNAME|Hostname of this machine|labby|
-|REMOTE_HOSTNAME|Hostname of remote peer|z230|
-|WG_LOCAL_IP	WireGuard tunnel IP of this host|44.131.40.1/30|
-|WG_REMOTE_IP WireGuard tunnel IP of remote peer|44.131.40.2/32|
-|WG_PORT	Listening port for WireGuard|51820|
-|LAN_SUBNET|Local subnet to NAT through tunnel (leave empty for standalone server)|192.168.1.0/24|
-|NET_44_0|Lower 2/3 of ARDC space|44.0.0.0/9|
-|NET_44_128|Upper 1/3 of ARDC space|44.128.0.0/10|
-|PRIVATE_KEY_FILE|Optional: path to local private key|/root/privkey|
-|PUBLIC_KEY_FILE|Optional: path to local public key|/root/pubkey|
-|REMOTE_PUBLIC_KEY_FILE|Optional: remote peer public key file|/root/remote.pub|
+```
+sudo ./setup_44net.sh
+```
 
-## Running the Script
-Make the script executable:
-```
-chmod +x setup-44net.sh
-```
-Run it as root:
-```
-sudo ./setup-44net.sh
-```
-Options (if using files):
-```
-sudo ./setup-44net.sh --private mypriv.key --public mypub.key --remote-key remote.pub
-```
-If no key files are provided, the script will prompt for the remote peer’s public key.
-## Script Actions
-When executed, the script performs:
-**1. Installs packages:**
-```
-wireguard iptables-persistent iproute2 resolvconf
-```
-**2. Generates or loads keys** for WireGuard:
-* Creates ```/etc/wireguard/privatekey``` and ```/etc/wireguard/publickey```.
-* Sets secure permissions.
+* Force mode (local or remote):
 
-**3. Writes the WireGuard configuration** (```/etc/wireguard/wg0.conf```):
-* Sets local IP, port, private key.
-* Adds peer with remote public key and AllowedIPs for 44Net.
-* Keeps the connection alive (PersistentKeepalive = 25).
+```
+sudo ./setup_44net.sh --mode local
+sudo ./setup_44net.sh --mode remote
+```
 
-**4. Adds routes** for the 44Net ranges.
+* Dry-run mode (no changes applied):
 
-**5. Configures iptables:**
+```
+sudo ./setup_44net.sh --dry-run
+```
 
-* NATs traffic from LAN to 44Net (if LAN subnet provided).
-* Sets FORWARD rules allowing outbound and inbound traffic for 44Net.
-* Drops invalid packets.
+## Key Parameters
 
-**6. Enables IP forwarding** persistently.
+* Load keys from files or provide the key strings:
 
-**7. Enables and starts** the ```wg-quick@wg0``` systemd service.
+```
+--private /path/to/privatekey
+--public  /path/to/publickey
+--remote-key /path/to/remote_publickey
+```
 
-**8. Updates** ```/etc/hosts``` with the remote host entry.  
-## Testing the Setup
-**1.** Check WireGuard status:
-```
-wg show
-```
-**2.** Test connectivity:
-```
-ping -c 3 44.0.0.1
-ping -c 3 44.128.0.1
-```
-**3.** From a LAN client (if NAT is configured):
-```
-ping 44.0.0.1
-```
-Notes
+## Client Management
 
-The tunnel **does not forward general internet traffic**, only 44Net addresses.
+* Interactive:
 
-For a **LAN gateway**, ensure the LAN subnet is correctly defined in ```LAN_SUBNET```.
+```
+sudo ./setup_44net.sh --mode remote
+# Then follow prompts to add/replace/remove clients
+```
 
-NAT is only applied if ```LAN_SUBNET``` is set.
+* Non-interactive:
 
-All key and configuration files are **stored securely** in ```/etc/wireguard```.
+* Add a client:
 
-The script handles **persistent routing and firewall rules**.
+```
+sudo ./setup_44net.sh --mode remote \
+    --client-action add \
+    --client-pub /path/to/client.pub \
+    --client-ip 44.1.2.6/32
+```
 
-## Advanced Options
-File-based key management:
+* Replace a client:
+
 ```
---public /path/to/pub.key --private /path/to/priv.key
---remote-key /path/to/remote.pub
+sudo ./setup_44net.sh --mode remote \
+    --client-action replace \
+    --old-client-pub /path/to/oldclient.pub \
+    --client-pub /path/to/newclient.pub \
+    --client-ip 44.1.2.6/32
 ```
-* You can modify AllowedIPs to use **specific 44Net ranges** rather than the full ```/8``` block:
+
+* Remove a client:
+
 ```
-NET_44_0="44.0.0.0/9"
-NET_44_128="44.128.0.0/10"
+sudo ./setup_44net.sh --mode remote \
+    --client-action remove \
+    --client-pub /path/to/client.pub
 ```
-Useful for ARDC ranges that have been sold off or reassigned.
-## Maintenance
-* Restart WireGuard:
-```
-sudo systemctl restart wg-quick@wg0
-```
-* Check routes:
-```
-ip route show
-```
-* Flush and reload iptables rules:
-```
-sudo iptables-restore < /etc/iptables/rules.v4
-```
-## Conclusion
-This guide provides a **repeatable, generic setup** for accessing ARDC 44Net via WireGuard:
-* Works for standalone servers or LAN gateways.
-* Fully persistent configuration.
-* Supports file-based or interactive key management.
-* Restricts traffic to 44Net only, keeping the server’s internet separate.
-* Optional NAT for LAN clients.
+
+## Additional Flags
+
+* --dry-run : Show what would be changed without touching disk  
+* --no-banner : Skip printing the banner  
+* --mode [local|remote] : Force the script mode (otherwise auto-detected)  
+
+## Logging
+
+* All actions are logged to /var/log/44net-setup.log  
+* Dry-run mode prints intended changes without modifying files
+
+## Notes
+
+* The script preserves existing iptables rules and appends 44Net-specific rules safely.
+* Public keys can be provided as either encoded strings or file paths.
+* IP addresses and key validity are fully sanity-checked before any changes are made.
+* Client changes are applied on-the-fly using wg set without restarting the interface.
