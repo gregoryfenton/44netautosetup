@@ -98,7 +98,9 @@ install_missing_packages() {
     local missing_pkgs=()
     for cmd in "${REQUIRED_COMMANDS[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            missing_pkgs+=("${PKG_MAP[$cmd]:-$cmd}")
+            local pkg="${PKG_MAP[$cmd]:-$cmd}"
+            # Add pkg only if not already in missing_pkgs
+            [[ ! " ${missing_pkgs[*]} " =~ " ${pkg} " ]] && missing_pkgs+=("$pkg")
         fi
     done
 
